@@ -2,41 +2,82 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>图片局部雾化与裁剪工具</title>
+    <title>规避即梦人像违规 - 核心版</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 800px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .img-container { max-height: 500px; margin-bottom: 20px; }
-        img { max-width: 100%; display: block; }
-        .controls { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-top: 20px; }
-        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
-        button:hover { background: #0056b3; }
-        input[type="range"] { vertical-align: middle; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #eef2f3; }
+        .container { max-width: 1000px; width: 100%; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        h1 { color: #d9534f; text-align: center; margin-bottom: 25px; font-weight: bold; }
+        
+        /* 拖拽上传感应区 */
+        .img-container { 
+            width: 100%; min-height: 450px; max-height: 700px; margin: 20px 0; 
+            background: #f0f0f0; border: 3px dashed #ccc; border-radius: 10px;
+            display: flex; justify-content: center; align-items: center; 
+            position: relative; overflow: hidden;
+        }
+        .img-container.drag-over { background: #d1ecf1; border-color: #0d6efd; }
+        #image { max-width: 100%; display: none; }
+        #placeholder { color: #666; font-size: 18px; text-align: center; }
+
+        /* 修复椭圆选框视觉 */
+        .ellipse-mode .cropper-view-box, 
+        .ellipse-mode .cropper-face { border-radius: 50%; }
+
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        
+        button { padding: 12px; cursor: pointer; background: #0d6efd; color: white; border: none; border-radius: 6px; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #0a58ca; }
+        .btn-purple { background: #6f42c1; }
+        .btn-green { background: #198754; }
+
+        #preview-section { width: 100%; border-top: 2px solid #eee; padding-top: 20px; text-align: center; }
+        canvas { max-width: 100%; border: 1px solid #333; margin-top: 15px; background: white; }
     </style>
 </head>
-<body>
+<body class="rect-mode">
 
 <div class="container">
-    <h2>图片局部处理工具</h2>
+    <h1>规避即梦人像违规</h1>
     
-    <input type="file" id="upload" accept="image/*">
+    <div class="control-group">
+        <label><strong>1. 上传图片（点击或拖入下方虚线框）</strong></label>
+        <input type="file" id="upload" accept="image/*">
+    </div>
     
-    <div class="img-container">
+    <div class="img-container" id="dropZone">
+        <div id="placeholder">📁 拖拽图片到这里上传</div>
         <img id="image">
     </div>
 
     <div class="controls">
-        <label>雾化程度 (20%-50%): 
-            <input type="range" id="blurRange" min="5" max="20" value="10">
-        </label>
-        <button id="btnBlur">局部雾化</button>
-        <button id="btnCrop">直接裁剪</button>
-        <button id="btnDownload" style="background: #28a745;">下载结果</button>
+        <div class="control-group">
+            <label>2. 选区与强度</label>
+            <select id="shapeType">
+                <option value="rect">矩形选区</option>
+                <option value="ellipse">圆形/椭圆选区</option>
+            </select>
+            <label>雾化强度</label>
+            <input type="range" id="blurRange" min="5" max="80" value="30">
+        </div>
+
+        <div class="control-group">
+            <label>3. 雾化处理</label>
+            <button id="btnBlurPreview">✨ 预览雾化效果</button>
+            <button id="btnBlurDual" class="btn-purple">📥 下载：雾化全图 + 选区原图</button>
+        </div>
+
+        <div class="control-group">
+            <label>4. 裁剪处理</label>
+            <button id="btnCropDual" class="btn-green">📥 下载：人像 + 挖空背景</button>
+        </div>
     </div>
 
-    <h3>处理结果预览：</h3>
-    <canvas id="resultCanvas" style="max-width: 100%; border: 1px solid #ddd;"></canvas>
+    <div id="preview-section">
+        <h3>实时结果预览</h3>
+        <canvas id="resultCanvas"></canvas>
+    </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
@@ -45,63 +86,143 @@
     let cropper;
     const image = document.getElementById('image');
     const upload = document.getElementById('upload');
+    const dropZone = document.getElementById('dropZone');
+    const shapeType = document.getElementById('shapeType');
     const resultCanvas = document.getElementById('resultCanvas');
     const ctx = resultCanvas.getContext('2d');
+    const placeholder = document.getElementById('placeholder');
 
-    // 图片上传并初始化裁剪器
-    upload.addEventListener('change', (e) => {
-        const file = e.target.files[0];
+    // 图片加载逻辑
+    function handleFile(file) {
+        if (!file || !file.type.startsWith('image/')) return;
         const reader = new FileReader();
-        reader.onload = (event) => {
-            image.src = event.target.result;
-            if (cropper) cropper.destroy();
-            cropper = new Cropper(image, {
-                viewMode: 1,
-                movable: true,
-                zoomable: true
-            });
+        reader.onload = (e) => {
+            placeholder.style.display = 'none';
+            image.style.display = 'block';
+            image.src = e.target.result;
+            image.onload = () => {
+                if (cropper) cropper.destroy();
+                cropper = new Cropper(image, { viewMode: 1, autoCropArea: 0.5 });
+            };
         };
         reader.readAsDataURL(file);
+    }
+
+    // 拖拽上传支持
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eName => {
+        dropZone.addEventListener(eName, (e) => { e.preventDefault(); e.stopPropagation(); });
+    });
+    dropZone.addEventListener('dragover', () => dropZone.classList.add('drag-over'));
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', (e) => {
+        dropZone.classList.remove('drag-over');
+        handleFile(e.dataTransfer.files[0]);
+    });
+    upload.addEventListener('change', (e) => handleFile(e.target.files[0]));
+
+    // 形状切换
+    shapeType.addEventListener('change', (e) => {
+        document.body.className = e.target.value === 'ellipse' ? 'ellipse-mode' : 'rect-mode';
     });
 
-    // 局部雾化逻辑
-    document.getElementById('btnBlur').addEventListener('click', () => {
-        if (!cropper) return;
-        
-        const canvas = cropper.getCroppedCanvas(); // 获取裁剪区域
-        const data = cropper.getData(); // 获取选区坐标
-        const blurValue = document.getElementById('blurRange').value;
+    // 绘制路径工具
+    function drawPath(context, x, y, w, h) {
+        context.beginPath();
+        if (shapeType.value === 'ellipse') {
+            context.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 2 * Math.PI);
+        } else {
+            context.rect(x, y, w, h);
+        }
+        context.closePath();
+    }
 
-        // 设置结果画布大小为原图大小
+    function download(canvas, name) {
+        const link = document.createElement('a');
+        link.download = name;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    }
+
+    // --- 功能 1：预览雾化 ---
+    document.getElementById('btnBlurPreview').addEventListener('click', () => {
+        if (!cropper) return alert("请先上传图片");
+        const data = cropper.getData();
+        const blur = document.getElementById('blurRange').value;
+
         resultCanvas.width = image.naturalWidth;
         resultCanvas.height = image.naturalHeight;
-
-        // 1. 先画原图
         ctx.drawImage(image, 0, 0);
-
-        // 2. 局部模糊
         ctx.save();
-        ctx.filter = `blur(${blurValue}px)`;
-        // 只在选定区域绘制模糊的图片块
-        ctx.drawImage(image, data.x, data.y, data.width, data.height, data.x, data.y, data.width, data.height);
+        drawPath(ctx, data.x, data.y, data.width, data.height);
+        ctx.clip();
+        ctx.filter = `blur(${blur}px)`;
+        ctx.drawImage(image, 0, 0);
         ctx.restore();
     });
 
-    // 直接裁剪逻辑
-    document.getElementById('btnCrop').addEventListener('click', () => {
+    // --- 功能 2：雾化双下载 ---
+    // 1. 框选的不带雾化的局部 2. 带有局部雾化的全图
+    document.getElementById('btnBlurDual').addEventListener('click', () => {
         if (!cropper) return;
-        const canvas = cropper.getCroppedCanvas();
-        resultCanvas.width = canvas.width;
-        resultCanvas.height = canvas.height;
-        ctx.drawImage(canvas, 0, 0);
+        const data = cropper.getData();
+        const blur = document.getElementById('blurRange').value;
+
+        // 文件 A: 框选区的原图局部
+        const portrait = document.createElement('canvas');
+        portrait.width = data.width; portrait.height = data.height;
+        const pCtx = portrait.getContext('2d');
+        pCtx.save();
+        drawPath(pCtx, 0, 0, data.width, data.height);
+        pCtx.clip();
+        pCtx.drawImage(image, data.x, data.y, data.width, data.height, 0, 0, data.width, data.height);
+        pCtx.restore();
+        download(portrait, 'Selected_Original_Part.png');
+
+        // 文件 B: 带有雾化效果的全图
+        setTimeout(() => {
+            const fullBlurred = document.createElement('canvas');
+            fullBlurred.width = image.naturalWidth; fullBlurred.height = image.naturalHeight;
+            const fCtx = fullBlurred.getContext('2d');
+            fCtx.drawImage(image, 0, 0);
+            fCtx.save();
+            drawPath(fCtx, data.x, data.y, data.width, data.height);
+            fCtx.clip();
+            fCtx.filter = `blur(${blur}px)`;
+            fCtx.drawImage(image, 0, 0);
+            fCtx.restore();
+            download(fullBlurred, 'Full_Blurred_Image.png');
+        }, 300);
     });
 
-    // 下载
-    document.getElementById('btnDownload').addEventListener('click', () => {
-        const link = document.createElement('a');
-        link.download = 'processed-image.png';
-        link.href = resultCanvas.toDataURL();
-        link.click();
+    // --- 功能 3：人景分离裁剪 ---
+    document.getElementById('btnCropDual').addEventListener('click', () => {
+        if (!cropper) return;
+        const data = cropper.getData();
+
+        // 下载：人像局部
+        const portrait = document.createElement('canvas');
+        portrait.width = data.width; portrait.height = data.height;
+        const pCtx = portrait.getContext('2d');
+        pCtx.save();
+        drawPath(pCtx, 0, 0, data.width, data.height);
+        pCtx.clip();
+        pCtx.drawImage(image, data.x, data.y, data.width, data.height, 0, 0, data.width, data.height);
+        pCtx.restore();
+        download(portrait, 'Portrait_Only.png');
+
+        // 下载：挖空背景
+        setTimeout(() => {
+            const bg = document.createElement('canvas');
+            bg.width = image.naturalWidth; bg.height = image.naturalHeight;
+            const bCtx = bg.getContext('2d');
+            bCtx.drawImage(image, 0, 0);
+            bCtx.globalCompositeOperation = 'destination-out';
+            bCtx.save();
+            drawPath(bCtx, data.x, data.y, data.width, data.height);
+            bCtx.fill();
+            bCtx.restore();
+            download(bg, 'Background_Hollow.png');
+        }, 300);
     });
 </script>
 
