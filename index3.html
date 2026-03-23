@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>规避即梦人像违规 - 核心版 V2.1 (精准版)</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #eef2f3; margin: 0; }
+        .container { max-width: 1100px; width: 100%; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); box-sizing: border-box; }
+        h1 { color: #d9534f; text-align: center; margin-bottom: 25px; font-weight: bold; }
+        
+        /* 工作区：限制最大高度 500px，彻底解决大图霸屏和白框问题 */
+        .workspace {
+            position: relative;
+            width: 100%;
+            height: 500px; /* 限制最大高度 */
+            background: #f0f0f0;
+            border: 3px dashed #ccc;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            user-select: none;
+        }
+        .workspace.drag-over { background: #d1ecf1; border-color: #0d6efd; }
+        #placeholder { color: #666; font-size: 18px; text-align: center; pointer-events: none; }
+        
+        /* Canvas 图层叠放 */
+        #imgCanvas, #overlayCanvas {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            display: none;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+        #overlayCanvas { cursor: crosshair; z-index: 10; }
+
+        /* 控制面板 */
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        .tip { font-size: 12px; color: #666; margin-top: -5px; }
+        
+        button { padding: 10px 15px; cursor: pointer; background: #0d6efd; color: white; border: none; border-radius: 6px; font-weight: bold; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
+        button:hover { background: #0a58ca; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-purple { background: #6f42c1; } .btn-purple:hover { background: #59339d; }
+        .btn-green { background: #198754; } .btn-green:hover { background: #146c43; }
+        .btn-ai { background: #ff9800; color: white; } .btn-ai:hover { background: #e68a00; }
+        .btn-danger { background: #dc3545; } .btn-danger:hover { background: #bb2d3b; }
+
+        #preview-section { width: 100%; border-top: 2px solid #eee; padding-top: 20px; text-align: center; margin-top: 20px; }
+        #resultCanvas { max-width: 100%; max-height: 500px; border: 1px solid #333; margin-top: 15px; background: white; object-fit: contain; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>规避即梦人像违规 - 核心版 V2.1 (精准版)</h1>
+    
+    <div class="control-group" style="margin-bottom: 10px;">
+        <label><strong>1. 上传图片（点击或直接拖入下方虚线框）</strong></label>
+        <input type="file" id="upload" accept="image/*">
+    </div>
+    
+    <div class="workspace" id="workspace">
+        <div id="placeholder">📁 拖拽图片到这里上传</div>
+        <canvas id="imgCanvas"></canvas>
+        <canvas id="overlayCanvas" tabindex="0"></canvas>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label><strong>2. 选区与AI控制</strong></label>
+            <select id="shapeType">
+                <option value="rect">选区形状：矩形</option>
+                <option value="ellipse">选区形状：圆形/椭圆</option>
+            </select>
+            <div style="display: flex; gap: 10px;">
+                <button id="btnAiDetect" class="btn-ai" style="flex:1;">🤖 AI 精准识别人脸</button>
+                <button id="btnClear" class="btn-danger" style="flex:1;">🗑️ 清空所有选区</button>
+            </div>
+            <p class="tip">💡 操作提示：按住 <b>Ctrl + 鼠标拖拽</b> 可新建选区（最多10个）。鼠标悬停选区变红时，按 <b>Delete</b> 键可删除该选区。拖拽右下角可缩放。</p>
+        </div>
+
+        <div class="control-group">
+            <label><strong>3. 雾化处理</strong></label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span>雾化强度:</span>
+                <input type="range" id="blurRange" min="5" max="80" value="30" style="flex: 1;">
+            </div>
+            <button id="btnBlurPreview">✨ 预览全图雾化效果</button>
+            <button id="btnBlurDual" class="btn-purple">📥 下载：全图雾化 + 独立原图</button>
+        </div>
+
+        <div class="control-group">
+            <label><strong>4. 裁剪处理</strong></label>
+            <button id="btnCropDual" class="btn-green">📥 下载：挖空背景 + 独立人像</button>
+            <p class="tip" style="margin-top: 10px;">* 点击下载后，由于浏览器机制，多个文件可能会依次弹出下载提示，请允许。</p>
+        </div>
+    </div>
+
+    <div id="preview-section">
+        <h3>实时结果预览（全图）</h3>
+        <canvas id="resultCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+    // --- 核心变量 ---
+    const workspace = document.getElementById('workspace');
+    const upload = document.getElementById('upload');
+    const placeholder = document.getElementById('placeholder');
+    const imgCanvas = document.getElementById('imgCanvas');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const shapeSelector = document.getElementById('shapeType');
+    
+    const ctxImg = imgCanvas.getContext('2d');
+    const ctxOverlay = overlayCanvas.getContext('2d');
+    const ctxResult = resultCanvas.getContext('2d');
+
+    let originalImage = new Image(); // 保存高清原图
+    let regions = []; // 存储所有选区 {x, y, w, h, type}
+    
+    // 交互状态
+    let isDragging = false;
+    let isResizing = false;
+    let isDrawingNew = false;
+    let startX, startY;
+    let activeRegion = null;
+    let hoveredRegion = null;
+    let scaleRatio = 1; // 物理像素与Canvas显示像素的比例
+
+    const MAX_REGIONS = 10;
+    const RESIZE_HANDLE_SIZE = 10;
+
+    // --- 1. 图片上传与自适应渲染 ---
+    function handleImage(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            originalImage.onload = () => {
+                placeholder.style.display = 'none';
+                imgCanvas.style.display = 'block';
+                overlayCanvas.style.display = 'block';
+                initCanvasSize();
+                
+                // 默认生成一个初始选区在中心
+                regions = [];
+                const initW = imgCanvas.width * 0.4;
+                const initH = imgCanvas.height * 0.4;
+                regions.push({
+                    x: (imgCanvas.width - initW) / 2,
+                    y: (imgCanvas.height - initH) / 2,
+                    w: initW, h: initH,
+                    type: shapeSelector.value
+                });
+                renderOverlay();
+                overlayCanvas.focus(); // 聚焦以接收键盘事件
+            };
+            originalImage.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    // 计算适应 500px 高度的尺寸
+    function initCanvasSize() {
+        const maxWidth = workspace.clientWidth;
+        const maxHeight = 500;
+        let w = originalImage.naturalWidth;
+        let h = originalImage.naturalHeight;
+
+        scaleRatio = Math.min(maxWidth / w, maxHeight / h);
+        if (scaleRatio > 1) scaleRatio = 1; // 小图不放大
+
+        const renderW = w * scaleRatio;
+        const renderH = h * scaleRatio;
+
+        imgCanvas.width = renderW; imgCanvas.height = renderH;
+        overlayCanvas.width = renderW; overlayCanvas.height = renderH;
+        
+        ctxImg.drawImage(originalImage, 0, 0, renderW, renderH);
+    }
+
+    // 拖拽事件监听
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eName => {
+        workspace.addEventListener(eName, e => { e.preventDefault(); e.stopPropagation(); });
+    });
+    workspace.addEventListener('dragover', () => workspace.classList.add('drag-over'));
+    workspace.addEventListener('dragleave', () => workspace.classList.remove('drag-over'));
+    workspace.addEventListener('drop', e => {
+        workspace.classList.remove('drag-over');
+        handleImage(e.dataTransfer.files[0]);
+    });
+    upload.addEventListener('change', e => handleImage(e.target.files[0]));
+
+    // --- 2. 交互与多选区逻辑 (Canvas) ---
+    function getMousePos(e) {
+        const rect = overlayCanvas.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    // 判断点是否在选区内
+    function isPointInRegion(x, y, r) {
+        if (r.type === 'rect') {
+            return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+        } else {
+            // 椭圆检测
+            const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+            const rx = r.w / 2, ry = r.h / 2;
+            return (Math.pow(x - cx, 2) / Math.pow(rx, 2)) + (Math.pow(y - cy, 2) / Math.pow(ry, 2)) <= 1;
+        }
+    }
+
+    // 判断点是否在缩放手柄上 (右下角)
+    function isPointInHandle(x, y, r) {
+        return x >= r.x + r.w - RESIZE_HANDLE_SIZE && x <= r.x + r.w &&
+               y >= r.y + r.h - RESIZE_HANDLE_SIZE && y <= r.y + r.h;
+    }
+
+    // 绘制交互层
+    function renderOverlay() {
+        ctxOverlay.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        
+        // 绘制暗色半透明遮罩
+        ctxOverlay.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctxOverlay.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        regions.forEach(r => {
+            ctxOverlay.save();
+            ctxOverlay.beginPath();
+            if (r.type === 'rect') {
+                ctxOverlay.rect(r.x, r.y, r.w, r.h);
+            } else {
+                ctxOverlay.ellipse(r.x + r.w/2, r.y + r.h/2, r.w/2, r.h/2, 0, 0, Math.PI*2);
+            }
+            ctxOverlay.clip();
+            // 掏空遮罩，显示原图亮度
+            ctxOverlay.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            ctxOverlay.drawImage(imgCanvas, 0, 0);
+            ctxOverlay.restore();
+
+            // 绘制边框 (悬停时变红，否则为蓝色)
+            ctxOverlay.beginPath();
+            if (r.type === 'rect') {
+                ctxOverlay.rect(r.x, r.y, r.w, r.h);
+            } else {
+                ctxOverlay.ellipse(r.x + r.w/2, r.y + r.h/2, r.w/2, r.h/2, 0, 0, Math.PI*2);
+            }
+            ctxOverlay.strokeStyle = (r === hoveredRegion) ? '#dc3545' : '#0d6efd';
+            ctxOverlay.lineWidth = 2;
+            ctxOverlay.stroke();
+
+            // 绘制缩放手柄
+            ctxOverlay.fillStyle = (r === hoveredRegion) ? '#dc3545' : '#0d6efd';
+            ctxOverlay.fillRect(r.x + r.w - RESIZE_HANDLE_SIZE, r.y + r.h - RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+        });
+    }
+
+    // 鼠标按下：判断是拖拽、缩放还是新建
+    overlayCanvas.addEventListener('mousedown', (e) => {
+        const {x, y} = getMousePos(e);
+        startX = x; startY = y;
+        
+        // 1. Ctrl + 拖拽 -> 新建
+        if (e.ctrlKey) {
+            if (regions.length >= MAX_REGIONS) {
+                alert("最多只能添加 10 个选区！"); return;
+            }
+            isDrawingNew = true;
+            activeRegion = { x, y, w: 0, h: 0, type: shapeSelector.value };
+            regions.push(activeRegion);
+            return;
+        }
+
+        // 2. 检查是否点击了缩放手柄
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInHandle(x, y, regions[i])) {
+                isResizing = true;
+                activeRegion = regions[i];
+                return;
+            }
+        }
+
+        // 3. 检查是否点击了选区内部 (用于移动)
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInRegion(x, y, regions[i])) {
+                isDragging = true;
+                activeRegion = regions[i];
+                // 记录相对偏移
+                activeRegion.offsetX = x - activeRegion.x;
+                activeRegion.offsetY = y - activeRegion.y;
+                return;
+            }
+        }
+    });
+
+    // 鼠标移动
+    overlayCanvas.addEventListener('mousemove', (e) => {
+        const {x, y} = getMousePos(e);
+
+        if (isDrawingNew && activeRegion) {
+            activeRegion.w = x - startX;
+            activeRegion.h = y - startY;
+            renderOverlay();
+            return;
+        }
+
+        if (isResizing && activeRegion) {
+            activeRegion.w = Math.max(10, x - activeRegion.x);
+            activeRegion.h = Math.max(10, y - activeRegion.y);
+            renderOverlay();
+            return;
+        }
+
+        if (isDragging && activeRegion) {
+            activeRegion.x = x - activeRegion.offsetX;
+            activeRegion.y = y - activeRegion.offsetY;
+            renderOverlay();
+            return;
+        }
+
+        // 没按下时：检测悬停变色和更改鼠标指针
+        let foundHover = null;
+        let cursor = 'crosshair';
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInHandle(x, y, regions[i])) {
+                foundHover = regions[i]; cursor = 'nwse-resize'; break;
+            } else if (isPointInRegion(x, y, regions[i])) {
+                foundHover = regions[i]; cursor = 'move'; break;
+            }
+        }
+        overlayCanvas.style.cursor = cursor;
+        if (hoveredRegion !== foundHover) {
+            hoveredRegion = foundHover;
+            renderOverlay();
+        }
+    });
+
+    // 鼠标松开
+    window.addEventListener('mouseup', () => {
+        if (isDrawingNew && activeRegion) {
+            // 修正反向拖拽产生的负宽/高
+            if (activeRegion.w < 0) { activeRegion.x += activeRegion.w; activeRegion.w = Math.abs(activeRegion.w); }
+            if (activeRegion.h < 0) { activeRegion.y += activeRegion.h; activeRegion.h = Math.abs(activeRegion.h); }
+            // 忽略太小的无效点击
+            if (activeRegion.w < 10 || activeRegion.h < 10) { regions.pop(); }
+        }
+        isDragging = false; isResizing = false; isDrawingNew = false; activeRegion = null;
+        renderOverlay();
+    });
+
+    // 键盘 Delete 键：删除悬停的选区
+    overlayCanvas.addEventListener('keydown', (e) => {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && hoveredRegion) {
+            e.preventDefault();
+            regions = regions.filter(r => r !== hoveredRegion);
+            hoveredRegion = null;
+            renderOverlay();
+        }
+    });
+
+    // 清空所有选区
+    document.getElementById('btnClear').addEventListener('click', () => {
+        regions = []; renderOverlay();
+    });
+
+    // 切换形状时，修改最新一个框的形状，并更改后续默认形状
+    shapeSelector.addEventListener('change', (e) => {
+        if (regions.length > 0) {
+            regions[regions.length - 1].type = e.target.value;
+            renderOverlay();
+        }
+    });
+
+    // --- 3. AI 精准识别核心逻辑（已针对眉骨到下嘴唇、颧骨到颧骨优化） ---
+    document.getElementById('btnAiDetect').addEventListener('click', async () => {
+        if (!originalImage.src) return alert("请先上传图片！");
+        const btn = document.getElementById('btnAiDetect');
+        btn.innerText = "⏳ 正在加载AI模型...";
+        btn.disabled = true;
+
+        try {
+            // 从公共 CDN 加载 TinyFaceDetector 极轻量模型
+            const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+            await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+            
+            btn.innerText = "🔍 正在精准锁定五官...";
+            
+            // 使用原图进行识别以保证精度
+            const detections = await faceapi.detectAllFaces(originalImage, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.4 }));
+            
+            if (detections.length === 0) {
+                alert("未检测到明显的人脸。");
+            } else {
+                // 清空原有的手工框，换成AI框
+                regions = [];
+                detections.forEach((det, index) => {
+                    if(index >= MAX_REGIONS) return;
+                    
+                    const box = det.box;
+                    
+                    // 【极简五官映射算法：眉、眼、鼻、嘴】
+                    // 1. 垂直方向 (Y轴)：眉毛大约在面部往下 25% 处；嘴巴底部大约在往下 80% 处。
+                    // 2. 水平方向 (X轴)：左右眼角外侧，比颧骨还要往内收，左右各收缩 15%。
+                    const tightW = box.width * 0.70;  // 宽度保留70%（左右各切掉15%的侧脸边缘）
+                    const tightH = box.height * 0.55; // 高度保留55%（80% - 25%，精准截取眉毛到嘴唇）
+                    
+                    const tightX = box.x + (box.width * 0.15); // 左侧从 15% 处开始（贴近左眼角）
+                    const tightY = box.y + (box.height * 0.25); // 顶部从 25% 处开始（贴近眉骨）
+
+                    // 转换回当前 Canvas 缩放比例的坐标，并强制指定为椭圆
+                    regions.push({
+                        x: tightX * scaleRatio,
+                        y: tightY * scaleRatio,
+                        w: tightW * scaleRatio,
+                        h: tightH * scaleRatio,
+                        type: 'ellipse' // 强制设定为椭圆形区域
+                    });
+                });
+                
+                // 自动将下拉菜单状态同步为椭圆
+                shapeSelector.value = 'ellipse'; 
+                renderOverlay();
+            }
+        } catch (error) {
+            console.error(error);
+            alert("AI模型加载失败，请检查网络连接或稍后再试。");
+        } finally {
+            btn.innerText = "🤖 AI 精准识别人脸";
+            btn.disabled = false;
+        }
+    });
+
+    // --- 4. 预览与多文件下载逻辑 ---
+
+    // 辅助工具：在 Canvas 上绘制真实原图尺寸的所有 Path 遮罩
+    function drawAllPathsOnOriginal(ctx) {
+        ctx.beginPath();
+        regions.forEach(r => {
+            // 将显示坐标还原回原始高清坐标
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            
+            if (r.type === 'ellipse') {
+                ctx.ellipse(ox + ow/2, oy + oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            } else {
+                ctx.rect(ox, oy, ow, oh);
+            }
+        });
+        ctx.closePath();
+    }
+
+    // 触发下载
+    function downloadCanvas(canvas, filename) {
+        const link = document.createElement('a');
+        link.download = filename;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    }
+
+    // 延迟下载助手，防止浏览器拦截并发下载
+    async function triggerDownloads(tasks) {
+        for (let i = 0; i < tasks.length; i++) {
+            downloadCanvas(tasks[i].canvas, tasks[i].name);
+            await new Promise(r => setTimeout(r, 600)); // 等待600ms
+        }
+    }
+
+    // 预览：全图雾化
+    document.getElementById('btnBlurPreview').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请上传图片并建立选区");
+        const blurVal = document.getElementById('blurRange').value;
+        
+        resultCanvas.width = originalImage.naturalWidth;
+        resultCanvas.height = originalImage.naturalHeight;
+        
+        ctxResult.drawImage(originalImage, 0, 0);
+        ctxResult.save();
+        drawAllPathsOnOriginal(ctxResult);
+        ctxResult.clip();
+        ctxResult.filter = `blur(${blurVal}px)`;
+        ctxResult.drawImage(originalImage, 0, 0);
+        ctxResult.restore();
+    });
+
+    // 雾化双下载：1张全图雾化 + N张独立的无雾化局部图
+    document.getElementById('btnBlurDual').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请建立至少一个选区");
+        const blurVal = document.getElementById('blurRange').value;
+        const tasks = [];
+
+        // 1. 生成每个选区的独立清晰局部图
+        regions.forEach((r, idx) => {
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            const partCanvas = document.createElement('canvas');
+            partCanvas.width = ow; partCanvas.height = oh;
+            const pCtx = partCanvas.getContext('2d');
+            
+            pCtx.save();
+            pCtx.beginPath();
+            if (r.type === 'ellipse') pCtx.ellipse(ow/2, oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            else pCtx.rect(0, 0, ow, oh);
+            pCtx.clip();
+            pCtx.drawImage(originalImage, ox, oy, ow, oh, 0, 0, ow, oh);
+            pCtx.restore();
+            
+            tasks.push({ canvas: partCanvas, name: `清晰局部_${idx+1}.png` });
+        });
+
+        // 2. 生成一张带有局部雾化的全图
+        const fullCanvas = document.createElement('canvas');
+        fullCanvas.width = originalImage.naturalWidth; fullCanvas.height = originalImage.naturalHeight;
+        const fCtx = fullCanvas.getContext('2d');
+        fCtx.drawImage(originalImage, 0, 0);
+        fCtx.save();
+        drawAllPathsOnOriginal(fCtx);
+        fCtx.clip();
+        fCtx.filter = `blur(${blurVal}px)`;
+        fCtx.drawImage(originalImage, 0, 0);
+        fCtx.restore();
+        
+        tasks.push({ canvas: fullCanvas, name: '全图_局部雾化处理后.png' });
+
+        triggerDownloads(tasks);
+    });
+
+    // 裁剪双下载：1张挖空背景图 + N张独立人像局部图
+    document.getElementById('btnCropDual').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请建立至少一个选区");
+        const tasks = [];
+
+        // 1. 生成每个选区的独立局部图 (同上)
+        regions.forEach((r, idx) => {
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            const partCanvas = document.createElement('canvas');
+            partCanvas.width = ow; partCanvas.height = oh;
+            const pCtx = partCanvas.getContext('2d');
+            
+            pCtx.save();
+            pCtx.beginPath();
+            if (r.type === 'ellipse') pCtx.ellipse(ow/2, oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            else pCtx.rect(0, 0, ow, oh);
+            pCtx.clip();
+            pCtx.drawImage(originalImage, ox, oy, ow, oh, 0, 0, ow, oh);
+            pCtx.restore();
+            
+            tasks.push({ canvas: partCanvas, name: `人像局部_${idx+1}.png` });
+        });
+
+        // 2. 生成一张挖空了指定选区的透明背景图
+        const bgCanvas = document.createElement('canvas');
+        bgCanvas.width = originalImage.naturalWidth; bgCanvas.height = originalImage.naturalHeight;
+        const bCtx = bgCanvas.getContext('2d');
+        bCtx.drawImage(originalImage, 0, 0);
+        bCtx.globalCompositeOperation = 'destination-out'; // 核心属性：挖空
+        bCtx.save();
+        drawAllPathsOnOriginal(bCtx);
+        bCtx.fill();
+        bCtx.restore();
+
+        tasks.push({ canvas: bgCanvas, name: '背景_去人像挖空.png' });
+
+        triggerDownloads(tasks);
+    });
+
+</script>
+</body>
+</html>
