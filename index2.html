@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>规避即梦人像违规 - AI 自动识别版</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #eef2f3; }
+        .container { max-width: 1000px; width: 100%; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        h1 { color: #d9534f; text-align: center; margin-bottom: 25px; font-weight: bold; }
+        
+        .img-container { 
+            width: 100%; min-height: 450px; max-height: 700px; margin: 20px 0; 
+            background: #f0f0f0; border: 3px dashed #ccc; border-radius: 10px;
+            display: flex; justify-content: center; align-items: center; 
+            position: relative; overflow: hidden;
+        }
+        .img-container.drag-over { background: #d1ecf1; border-color: #0d6efd; }
+        #image { max-width: 100%; display: none; }
+        #placeholder { color: #666; font-size: 18px; text-align: center; }
+
+        /* 修复椭圆选框视觉效果 */
+        .ellipse-mode .cropper-view-box, 
+        .ellipse-mode .cropper-face { border-radius: 50%; }
+
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        
+        button { padding: 12px; cursor: pointer; background: #0d6efd; color: white; border: none; border-radius: 6px; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #0a58ca; }
+        .btn-purple { background: #6f42c1; }
+        .btn-green { background: #198754; }
+
+        #preview-section { width: 100%; border-top: 2px solid #eee; padding-top: 20px; text-align: center; }
+        canvas { max-width: 100%; border: 1px solid #333; margin-top: 15px; background: white; }
+
+        /* AI 状态条 */
+        #ai-status { padding: 10px; background: #fff3cd; color: #856404; width: 100%; text-align: center; border-radius: 6px; margin-bottom: 15px; font-weight: bold; }
+    </style>
+</head>
+<body class="ellipse-mode"> <div class="container">
+    <h1>规避即梦人像违规</h1>
+    
+    <div id="ai-status">🤖 正在唤醒 AI 识别引擎，请稍候...</div>
+
+    <div class="control-group">
+        <label><strong>1. 上传图片（拖拽至框内 AI 会自动识别）</strong></label>
+        <input type="file" id="upload" accept="image/*">
+    </div>
+    
+    <div class="img-container" id="dropZone">
+        <div id="placeholder">📁 拖拽图片到这里，AI 自动定位人脸</div>
+        <img id="image">
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>2. 选区与强度</label>
+            <select id="shapeType">
+                <option value="ellipse">圆形/椭圆选区</option>
+                <option value="rect">矩形选区</option>
+            </select>
+            <label>雾化强度</label>
+            <input type="range" id="blurRange" min="5" max="80" value="30">
+        </div>
+
+        <div class="control-group">
+            <label>3. 雾化预览与下载</label>
+            <button id="btnBlurPreview">✨ 预览当前效果</button>
+            <button id="btnBlurDual" class="btn-purple">📥 雾化双下载 (原图局部+全图雾化)</button>
+        </div>
+
+        <div class="control-group">
+            <label>4. 裁剪下载</label>
+            <button id="btnCropDual" class="btn-green">📥 裁剪双下载 (人像+背景)</button>
+        </div>
+    </div>
+
+    <div id="preview-section">
+        <h3>结果预览</h3>
+        <canvas id="resultCanvas"></canvas>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+
+<script>
+    let cropper;
+    const image = document.getElementById('image');
+    const upload = document.getElementById('upload');
+    const dropZone = document.getElementById('dropZone');
+    const statusTip = document.getElementById('ai-status');
+    const shapeType = document.getElementById('shapeType');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const ctx = resultCanvas.getContext('2d');
+    const placeholder = document.getElementById('placeholder');
+
+    // --- 核心：AI 模型加载 (使用公共 CDN 免配置) ---
+    async function initAI() {
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+        try {
+            await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+            statusTip.innerText = "✅ AI 引擎已就绪！请上传图片，我会自动帮你找脸。";
+            statusTip.style.background = "#d4edda";
+            statusTip.style.color = "#155724";
+        } catch (e) {
+            statusTip.innerText = "❌ AI 加载失败，请检查网络并刷新页面。";
+        }
+    }
+    initAI();
+
+    async function handleFile(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            placeholder.style.display = 'none';
+            image.style.display = 'block';
+            image.src = e.target.result;
+            image.onload = async () => {
+                if (cropper) cropper.destroy();
+                
+                statusTip.innerText = "🔍 AI 正在识别画面中...";
+                // 创建选区工具
+                cropper = new Cropper(image, { viewMode: 1, autoCropArea: 0.5 });
+
+                // AI 人脸检测
+                const detections = await faceapi.detectAllFaces(image, new faceapi.TinyFaceDetectorOptions());
+                
+                if (detections.length > 0) {
+                    const box = detections[0].box;
+                    // 自动设置选区，并适当扩大一点范围 (增加 10% 的边距)
+                    cropper.setData({
+                        x: box.x - box.width * 0.1,
+                        y: box.y - box.height * 0.1,
+                        width: box.width * 1.2,
+                        height: box.height * 1.2
+                    });
+                    statusTip.innerText = "✅ 已自动为您圈中人脸！";
+                } else {
+                    statusTip.innerText = "⚠️ 没找到人脸，请手动移动选框。";
+                }
+            };
+        };
+        reader.readAsDataURL(file);
+    }
+
+    // 拖拽逻辑保持
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(n => {
+        dropZone.addEventListener(n, e => { e.preventDefault(); e.stopPropagation(); });
+    });
+    dropZone.addEventListener('drop', e => handleFile(e.dataTransfer.files[0]));
+    upload.addEventListener('change', e => handleFile(e.target.files[0]));
+    shapeType.addEventListener('change', e => document.body.className = e.target.value === 'ellipse' ? 'ellipse-mode' : 'rect-mode');
+
+    // 路径绘制与下载逻辑 (严格执行你的新要求)
+    function drawPath(c, x, y, w, h) {
+        c.beginPath();
+        if (shapeType.value === 'ellipse') c.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 2 * Math.PI);
+        else c.rect(x, y, w, h);
+        c.closePath();
+    }
+
+    function download(c, n) {
+        const a = document.createElement('a'); a.download = n; a.href = c.toDataURL('image/png'); a.click();
+    }
+
+    // 预览
+    document.getElementById('btnBlurPreview').addEventListener('click', () => {
+        if (!cropper) return;
+        const d = cropper.getData();
+        resultCanvas.width = image.naturalWidth; resultCanvas.height = image.naturalHeight;
+        ctx.drawImage(image, 0, 0);
+        ctx.save(); drawPath(ctx, d.x, d.y, d.width, d.height); ctx.clip();
+        ctx.filter = `blur(${document.getElementById('blurRange').value}px)`;
+        ctx.drawImage(image, 0, 0); ctx.restore();
+    });
+
+    // 雾化双下载
+    document.getElementById('btnBlurDual').addEventListener('click', () => {
+        if (!cropper) return;
+        const d = cropper.getData();
+        const blur = document.getElementById('blurRange').value;
+
+        // 1. 框选的局部 (无雾化)
+        const p = document.createElement('canvas');
+        p.width = d.width; p.height = d.height;
+        const pc = p.getContext('2d');
+        pc.save(); drawPath(pc, 0, 0, d.width, d.height); pc.clip();
+        pc.drawImage(image, d.x, d.y, d.width, d.height, 0, 0, d.width, d.height); pc.restore();
+        download(p, 'Local_Original.png');
+
+        // 2. 雾化全图
+        setTimeout(() => {
+            const f = document.createElement('canvas');
+            f.width = image.naturalWidth; f.height = image.naturalHeight;
+            const fc = f.getContext('2d');
+            fc.drawImage(image, 0, 0);
+            fc.save(); drawPath(fc, d.x, d.y, d.width, d.height); fc.clip();
+            fc.filter = `blur(${blur}px)`; fc.drawImage(image, 0, 0); fc.restore();
+            download(f, 'Full_Blurred.png');
+        }, 300);
+    });
+
+    // 裁剪双下载
+    document.getElementById('btnCropDual').addEventListener('click', () => {
+        if (!cropper) return;
+        const d = cropper.getData();
+        // 1. 人像局部
+        const p = document.createElement('canvas');
+        p.width = d.width; p.height = d.height;
+        const pc = p.getContext('2d');
+        pc.save(); drawPath(pc, 0, 0, d.width, d.height); pc.clip();
+        pc.drawImage(image, d.x, d.y, d.width, d.height, 0, 0, d.width, d.height); pc.restore();
+        download(p, 'Portrait_Only.png');
+
+        // 2. 挖空背景
+        setTimeout(() => {
+            const b = document.createElement('canvas');
+            b.width = image.naturalWidth; b.height = image.naturalHeight;
+            const bc = b.getContext('2d');
+            bc.drawImage(image, 0, 0); bc.globalCompositeOperation = 'destination-out';
+            bc.save(); drawPath(bc, d.x, d.y, d.width, d.height); bc.fill(); bc.restore();
+            download(b, 'Hollow_Background.png');
+        }, 300);
+    });
+</script>
+
+</body>
+</html>
