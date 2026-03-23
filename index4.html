@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>规避即梦人像违规 - 核心版 V3 (缩放精细版)</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #eef2f3; margin: 0; }
+        .container { max-width: 1100px; width: 100%; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); box-sizing: border-box; }
+        h1 { color: #d9534f; text-align: center; margin-bottom: 25px; font-weight: bold; }
+        
+        /* 工作区：支持滚动条与缩放 */
+        .workspace {
+            position: relative;
+            width: 100%;
+            height: 500px; /* 固定高度，溢出显示滚动条 */
+            background: #f0f0f0;
+            border: 3px dashed #ccc;
+            border-radius: 10px;
+            margin: 20px 0;
+            overflow: auto; /* 允许滚动 */
+        }
+        .workspace.drag-over { background: #d1ecf1; border-color: #0d6efd; }
+        #placeholder { 
+            color: #666; font-size: 18px; text-align: center; pointer-events: none;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        }
+        
+        /* 缩放容器 */
+        #canvasContainer {
+            display: none;
+            position: relative;
+            margin: 0 auto; /* 水平居中 */
+            transform-origin: top center; /* 从顶部中心开始缩放 */
+            transition: transform 0.1s ease-out;
+        }
+
+        #imgCanvas, #overlayCanvas {
+            position: absolute;
+            top: 0; left: 0;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+        #overlayCanvas { cursor: crosshair; z-index: 10; }
+
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        .tip { font-size: 12px; color: #666; margin-top: -5px; }
+        
+        button { padding: 10px 15px; cursor: pointer; background: #0d6efd; color: white; border: none; border-radius: 6px; font-weight: bold; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
+        button:hover { background: #0a58ca; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-purple { background: #6f42c1; } .btn-purple:hover { background: #59339d; }
+        .btn-green { background: #198754; } .btn-green:hover { background: #146c43; }
+        .btn-ai { background: #ff9800; color: white; } .btn-ai:hover { background: #e68a00; }
+        .btn-danger { background: #dc3545; } .btn-danger:hover { background: #bb2d3b; }
+        .btn-tool { background: #6c757d; padding: 8px; font-size: 14px; } .btn-tool:hover { background: #5c636a; }
+
+        #preview-section { width: 100%; border-top: 2px solid #eee; padding-top: 20px; text-align: center; margin-top: 20px; }
+        #resultCanvas { max-width: 100%; max-height: 500px; border: 1px solid #333; margin-top: 15px; background: white; object-fit: contain; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>规避即梦人像违规 - 核心版 V3</h1>
+    
+    <div class="control-group" style="margin-bottom: 10px;">
+        <label><strong>1. 上传图片（点击或直接拖入下方虚线框）</strong></label>
+        <input type="file" id="upload" accept="image/*">
+    </div>
+    
+    <div class="workspace" id="workspace">
+        <div id="placeholder">📁 拖拽图片到这里上传</div>
+        <div id="canvasContainer">
+            <canvas id="imgCanvas"></canvas>
+            <canvas id="overlayCanvas" tabindex="0"></canvas>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label><strong>2. 视图缩放</strong></label>
+            <div style="display: flex; gap: 5px; align-items: center;">
+                <button id="btnZoomOut" class="btn-tool" style="flex:1;">➖</button>
+                <span id="zoomLabel" style="width: 50px; text-align: center; font-weight: bold;">100%</span>
+                <button id="btnZoomIn" class="btn-tool" style="flex:1;">➕</button>
+                <button id="btnZoomReset" class="btn-tool" style="flex:1.5;">🔄 复原</button>
+            </div>
+            <p class="tip">💡 操作提示：将鼠标放在图片上，按住 <b>Ctrl + 鼠标滚轮</b> 也可直接缩放。放大后可通过外侧滚动条拖动图片。</p>
+        </div>
+
+        <div class="control-group">
+            <label><strong>3. 选区与AI控制</strong></label>
+            <select id="shapeType">
+                <option value="rect">选区形状：矩形</option>
+                <option value="ellipse">选区形状：圆形/椭圆</option>
+            </select>
+            <div style="display: flex; gap: 10px;">
+                <button id="btnAiDetect" class="btn-ai" style="flex:1;">🤖 AI 极限识别</button>
+                <button id="btnClear" class="btn-danger" style="flex:1;">🗑️ 清空选区</button>
+            </div>
+            <p class="tip">💡 按住 <b>Ctrl + 鼠标拖拽</b> 新建选区。悬停变红后按 <b>Delete</b> 删除。</p>
+        </div>
+
+        <div class="control-group">
+            <label><strong>4. 雾化处理</strong></label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span>雾化强度:</span>
+                <input type="range" id="blurRange" min="5" max="80" value="30" style="flex: 1;">
+            </div>
+            <button id="btnBlurPreview">✨ 预览全图雾化效果</button>
+            <button id="btnBlurDual" class="btn-purple">📥 下载：全图雾化 + 独立原图</button>
+        </div>
+
+        <div class="control-group">
+            <label><strong>5. 裁剪处理</strong></label>
+            <button id="btnCropDual" class="btn-green">📥 下载：挖空背景 + 独立人像</button>
+        </div>
+    </div>
+
+    <div id="preview-section">
+        <h3>实时结果预览（全图）</h3>
+        <canvas id="resultCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+    const workspace = document.getElementById('workspace');
+    const upload = document.getElementById('upload');
+    const placeholder = document.getElementById('placeholder');
+    const canvasContainer = document.getElementById('canvasContainer');
+    const imgCanvas = document.getElementById('imgCanvas');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const shapeSelector = document.getElementById('shapeType');
+    
+    const ctxImg = imgCanvas.getContext('2d');
+    const ctxOverlay = overlayCanvas.getContext('2d');
+    const ctxResult = resultCanvas.getContext('2d');
+
+    let originalImage = new Image();
+    let regions = [];
+    
+    // 交互状态
+    let isDragging = false, isResizing = false, isDrawingNew = false;
+    let startX, startY;
+    let activeRegion = null, hoveredRegion = null;
+    let scaleRatio = 1; 
+    let currentZoom = 1; // 当前缩放比例
+
+    const MAX_REGIONS = 10;
+    const RESIZE_HANDLE_SIZE = 10;
+
+    // --- 缩放控制逻辑 ---
+    function updateZoom(newZoom) {
+        currentZoom = Math.max(0.2, Math.min(newZoom, 5)); // 限制缩放范围在 20% 到 500% 之间
+        document.getElementById('zoomLabel').innerText = Math.round(currentZoom * 100) + '%';
+        canvasContainer.style.transform = `scale(${currentZoom})`;
+    }
+
+    document.getElementById('btnZoomIn').addEventListener('click', () => updateZoom(currentZoom + 0.2));
+    document.getElementById('btnZoomOut').addEventListener('click', () => updateZoom(currentZoom - 0.2));
+    document.getElementById('btnZoomReset').addEventListener('click', () => updateZoom(1));
+
+    workspace.addEventListener('wheel', (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 0.1 : -0.1;
+            updateZoom(currentZoom + delta);
+        }
+    }, { passive: false });
+
+    // --- 1. 图片上传与自适应渲染 ---
+    function handleImage(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            originalImage.onload = () => {
+                placeholder.style.display = 'none';
+                canvasContainer.style.display = 'block';
+                initCanvasSize();
+                
+                regions = [];
+                const initW = imgCanvas.width * 0.4;
+                const initH = imgCanvas.height * 0.4;
+                regions.push({
+                    x: (imgCanvas.width - initW) / 2,
+                    y: (imgCanvas.height - initH) / 2,
+                    w: initW, h: initH,
+                    type: shapeSelector.value
+                });
+                renderOverlay();
+                overlayCanvas.focus();
+            };
+            originalImage.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function initCanvasSize() {
+        const maxWidth = workspace.clientWidth - 20; 
+        const maxHeight = 500;
+        let w = originalImage.naturalWidth;
+        let h = originalImage.naturalHeight;
+
+        scaleRatio = Math.min(maxWidth / w, maxHeight / h);
+        if (scaleRatio > 1) scaleRatio = 1;
+
+        const renderW = w * scaleRatio;
+        const renderH = h * scaleRatio;
+
+        // 设置 Canvas 内部像素尺寸
+        imgCanvas.width = renderW; imgCanvas.height = renderH;
+        overlayCanvas.width = renderW; overlayCanvas.height = renderH;
+        
+        // 设置容器的物理尺寸
+        canvasContainer.style.width = renderW + 'px';
+        canvasContainer.style.height = renderH + 'px';
+
+        // 垂直居中补偿
+        if (renderH < 500) {
+            canvasContainer.style.top = ((500 - renderH) / 2) + 'px';
+        } else {
+            canvasContainer.style.top = '0px';
+        }
+
+        ctxImg.drawImage(originalImage, 0, 0, renderW, renderH);
+        updateZoom(1); // 上传新图片时重置缩放
+    }
+
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eName => {
+        workspace.addEventListener(eName, e => { e.preventDefault(); e.stopPropagation(); });
+    });
+    workspace.addEventListener('dragover', () => workspace.classList.add('drag-over'));
+    workspace.addEventListener('dragleave', () => workspace.classList.remove('drag-over'));
+    workspace.addEventListener('drop', e => {
+        workspace.classList.remove('drag-over');
+        handleImage(e.dataTransfer.files[0]);
+    });
+    upload.addEventListener('change', e => handleImage(e.target.files[0]));
+
+    // --- 2. 交互与多选区逻辑 ---
+    function getMousePos(e) {
+        const rect = overlayCanvas.getBoundingClientRect();
+        // 核心修复：根据当前缩放比例计算真实的 Canvas 内部坐标
+        return { 
+            x: (e.clientX - rect.left) / currentZoom, 
+            y: (e.clientY - rect.top) / currentZoom 
+        };
+    }
+
+    function isPointInRegion(x, y, r) {
+        if (r.type === 'rect') {
+            return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+        } else {
+            const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+            const rx = r.w / 2, ry = r.h / 2;
+            return (Math.pow(x - cx, 2) / Math.pow(rx, 2)) + (Math.pow(y - cy, 2) / Math.pow(ry, 2)) <= 1;
+        }
+    }
+
+    function isPointInHandle(x, y, r) {
+        return x >= r.x + r.w - RESIZE_HANDLE_SIZE && x <= r.x + r.w &&
+               y >= r.y + r.h - RESIZE_HANDLE_SIZE && y <= r.y + r.h;
+    }
+
+    function renderOverlay() {
+        ctxOverlay.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        
+        ctxOverlay.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctxOverlay.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        regions.forEach(r => {
+            // 掏空遮罩
+            ctxOverlay.save();
+            ctxOverlay.beginPath();
+            if (r.type === 'rect') {
+                ctxOverlay.rect(r.x, r.y, r.w, r.h);
+            } else {
+                ctxOverlay.moveTo(r.x + r.w, r.y + r.h/2); // 修复长条 BUG：强行抬笔移动到弧线起点
+                ctxOverlay.ellipse(r.x + r.w/2, r.y + r.h/2, r.w/2, r.h/2, 0, 0, Math.PI*2);
+            }
+            ctxOverlay.clip();
+            ctxOverlay.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            ctxOverlay.drawImage(imgCanvas, 0, 0);
+            ctxOverlay.restore();
+
+            // 绘制边框
+            ctxOverlay.beginPath();
+            if (r.type === 'rect') {
+                ctxOverlay.rect(r.x, r.y, r.w, r.h);
+            } else {
+                ctxOverlay.moveTo(r.x + r.w, r.y + r.h/2); // 修复长条 BUG：同样在此处抬笔
+                ctxOverlay.ellipse(r.x + r.w/2, r.y + r.h/2, r.w/2, r.h/2, 0, 0, Math.PI*2);
+            }
+            ctxOverlay.strokeStyle = (r === hoveredRegion) ? '#dc3545' : '#0d6efd';
+            ctxOverlay.lineWidth = 2;
+            ctxOverlay.stroke();
+
+            // 绘制缩放手柄
+            ctxOverlay.fillStyle = (r === hoveredRegion) ? '#dc3545' : '#0d6efd';
+            ctxOverlay.fillRect(r.x + r.w - RESIZE_HANDLE_SIZE, r.y + r.h - RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+        });
+    }
+
+    overlayCanvas.addEventListener('mousedown', (e) => {
+        const {x, y} = getMousePos(e);
+        startX = x; startY = y;
+        
+        if (e.ctrlKey) {
+            if (regions.length >= MAX_REGIONS) return alert("最多只能添加 10 个选区！");
+            isDrawingNew = true;
+            activeRegion = { x, y, w: 0, h: 0, type: shapeSelector.value };
+            regions.push(activeRegion);
+            return;
+        }
+
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInHandle(x, y, regions[i])) {
+                isResizing = true; activeRegion = regions[i]; return;
+            }
+        }
+
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInRegion(x, y, regions[i])) {
+                isDragging = true; activeRegion = regions[i];
+                activeRegion.offsetX = x - activeRegion.x;
+                activeRegion.offsetY = y - activeRegion.y;
+                return;
+            }
+        }
+    });
+
+    overlayCanvas.addEventListener('mousemove', (e) => {
+        const {x, y} = getMousePos(e);
+
+        if (isDrawingNew && activeRegion) {
+            activeRegion.w = x - startX; activeRegion.h = y - startY; renderOverlay(); return;
+        }
+
+        if (isResizing && activeRegion) {
+            activeRegion.w = Math.max(10, x - activeRegion.x);
+            activeRegion.h = Math.max(10, y - activeRegion.y);
+            renderOverlay(); return;
+        }
+
+        if (isDragging && activeRegion) {
+            activeRegion.x = x - activeRegion.offsetX;
+            activeRegion.y = y - activeRegion.offsetY;
+            renderOverlay(); return;
+        }
+
+        let foundHover = null; let cursor = 'crosshair';
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (isPointInHandle(x, y, regions[i])) { foundHover = regions[i]; cursor = 'nwse-resize'; break; } 
+            else if (isPointInRegion(x, y, regions[i])) { foundHover = regions[i]; cursor = 'move'; break; }
+        }
+        overlayCanvas.style.cursor = cursor;
+        if (hoveredRegion !== foundHover) { hoveredRegion = foundHover; renderOverlay(); }
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isDrawingNew && activeRegion) {
+            if (activeRegion.w < 0) { activeRegion.x += activeRegion.w; activeRegion.w = Math.abs(activeRegion.w); }
+            if (activeRegion.h < 0) { activeRegion.y += activeRegion.h; activeRegion.h = Math.abs(activeRegion.h); }
+            if (activeRegion.w < 10 || activeRegion.h < 10) regions.pop();
+        }
+        isDragging = false; isResizing = false; isDrawingNew = false; activeRegion = null;
+        renderOverlay();
+    });
+
+    overlayCanvas.addEventListener('keydown', (e) => {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && hoveredRegion) {
+            e.preventDefault();
+            regions = regions.filter(r => r !== hoveredRegion);
+            hoveredRegion = null; renderOverlay();
+        }
+    });
+
+    document.getElementById('btnClear').addEventListener('click', () => { regions = []; renderOverlay(); });
+
+    shapeSelector.addEventListener('change', (e) => {
+        if (regions.length > 0) { regions[regions.length - 1].type = e.target.value; renderOverlay(); }
+    });
+
+    // --- 3. AI 极限识别逻辑 ---
+    document.getElementById('btnAiDetect').addEventListener('click', async () => {
+        if (!originalImage.src) return alert("请先上传图片！");
+        const btn = document.getElementById('btnAiDetect');
+        btn.innerText = "⏳ 正在加载AI模型..."; btn.disabled = true;
+
+        try {
+            const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+            await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+            
+            btn.innerText = "🔍 正在极限提取五官...";
+            
+            // 核心修复：下调识别阈值至 0.15，大幅增加对 3D 角色及特殊设定的敏感度
+            const detections = await faceapi.detectAllFaces(originalImage, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.15 }));
+            
+            if (detections.length === 0) {
+                alert("由于模型限制，AI 未能找到疑似人脸的区域，请使用放大功能手动框选。");
+            } else {
+                regions = [];
+                detections.forEach((det, index) => {
+                    if(index >= MAX_REGIONS) return;
+                    const box = det.box;
+                    const tightW = box.width * 0.70;  
+                    const tightH = box.height * 0.55; 
+                    const tightX = box.x + (box.width * 0.15); 
+                    const tightY = box.y + (box.height * 0.25); 
+
+                    regions.push({
+                        x: tightX * scaleRatio, y: tightY * scaleRatio,
+                        w: tightW * scaleRatio, h: tightH * scaleRatio, type: 'ellipse'
+                    });
+                });
+                shapeSelector.value = 'ellipse'; 
+                renderOverlay();
+            }
+        } catch (error) {
+            console.error(error); alert("AI模型加载失败，请检查网络。");
+        } finally {
+            btn.innerText = "🤖 AI 极限识别"; btn.disabled = false;
+        }
+    });
+
+    // --- 4. 预览与渲染逻辑 ---
+    function drawAllPathsOnOriginal(ctx) {
+        ctx.beginPath();
+        regions.forEach(r => {
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            if (r.type === 'ellipse') {
+                ctx.moveTo(ox + ow, oy + oh/2); // 修复长条 BUG
+                ctx.ellipse(ox + ow/2, oy + oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            } else {
+                ctx.rect(ox, oy, ow, oh);
+            }
+        });
+        ctx.closePath();
+    }
+
+    function downloadCanvas(canvas, filename) {
+        const link = document.createElement('a'); link.download = filename;
+        link.href = canvas.toDataURL('image/png'); link.click();
+    }
+
+    async function triggerDownloads(tasks) {
+        for (let i = 0; i < tasks.length; i++) {
+            downloadCanvas(tasks[i].canvas, tasks[i].name);
+            await new Promise(r => setTimeout(r, 600));
+        }
+    }
+
+    document.getElementById('btnBlurPreview').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请上传图片并建立选区");
+        const blurVal = document.getElementById('blurRange').value;
+        
+        resultCanvas.width = originalImage.naturalWidth; resultCanvas.height = originalImage.naturalHeight;
+        ctxResult.drawImage(originalImage, 0, 0);
+        ctxResult.save(); drawAllPathsOnOriginal(ctxResult); ctxResult.clip();
+        ctxResult.filter = `blur(${blurVal}px)`; ctxResult.drawImage(originalImage, 0, 0); ctxResult.restore();
+    });
+
+    document.getElementById('btnBlurDual').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请建立至少一个选区");
+        const blurVal = document.getElementById('blurRange').value;
+        const tasks = [];
+
+        regions.forEach((r, idx) => {
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            const partCanvas = document.createElement('canvas'); partCanvas.width = ow; partCanvas.height = oh;
+            const pCtx = partCanvas.getContext('2d');
+            pCtx.save(); pCtx.beginPath();
+            if (r.type === 'ellipse') pCtx.ellipse(ow/2, oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            else pCtx.rect(0, 0, ow, oh);
+            pCtx.clip(); pCtx.drawImage(originalImage, ox, oy, ow, oh, 0, 0, ow, oh); pCtx.restore();
+            tasks.push({ canvas: partCanvas, name: `清晰局部_${idx+1}.png` });
+        });
+
+        const fullCanvas = document.createElement('canvas');
+        fullCanvas.width = originalImage.naturalWidth; fullCanvas.height = originalImage.naturalHeight;
+        const fCtx = fullCanvas.getContext('2d');
+        fCtx.drawImage(originalImage, 0, 0); fCtx.save(); drawAllPathsOnOriginal(fCtx); fCtx.clip();
+        fCtx.filter = `blur(${blurVal}px)`; fCtx.drawImage(originalImage, 0, 0); fCtx.restore();
+        tasks.push({ canvas: fullCanvas, name: '全图_局部雾化处理后.png' });
+        triggerDownloads(tasks);
+    });
+
+    document.getElementById('btnCropDual').addEventListener('click', () => {
+        if (!originalImage.src || regions.length === 0) return alert("请建立至少一个选区");
+        const tasks = [];
+
+        regions.forEach((r, idx) => {
+            const ox = r.x / scaleRatio, oy = r.y / scaleRatio;
+            const ow = r.w / scaleRatio, oh = r.h / scaleRatio;
+            const partCanvas = document.createElement('canvas'); partCanvas.width = ow; partCanvas.height = oh;
+            const pCtx = partCanvas.getContext('2d');
+            pCtx.save(); pCtx.beginPath();
+            if (r.type === 'ellipse') pCtx.ellipse(ow/2, oh/2, ow/2, oh/2, 0, 0, Math.PI*2);
+            else pCtx.rect(0, 0, ow, oh);
+            pCtx.clip(); pCtx.drawImage(originalImage, ox, oy, ow, oh, 0, 0, ow, oh); pCtx.restore();
+            tasks.push({ canvas: partCanvas, name: `人像局部_${idx+1}.png` });
+        });
+
+        const bgCanvas = document.createElement('canvas');
+        bgCanvas.width = originalImage.naturalWidth; bgCanvas.height = originalImage.naturalHeight;
+        const bCtx = bgCanvas.getContext('2d');
+        bCtx.drawImage(originalImage, 0, 0);
+        bCtx.globalCompositeOperation = 'destination-out'; bCtx.save(); drawAllPathsOnOriginal(bCtx); bCtx.fill(); bCtx.restore();
+        tasks.push({ canvas: bgCanvas, name: '背景_去人像挖空.png' });
+        triggerDownloads(tasks);
+    });
+</script>
+</body>
+</html>
